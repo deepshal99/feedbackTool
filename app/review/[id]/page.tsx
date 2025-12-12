@@ -8,6 +8,8 @@ import { IframeContainer } from '@/components/review/IframeContainer';
 import { CommentsSidebar } from '@/components/review/CommentsSidebar';
 import { DeviceMode, Comment, Project } from '@/types';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { MessageSquare, Share2, Check, Copy } from 'lucide-react';
 import {
     Dialog,
@@ -66,12 +68,15 @@ export default function ReviewPage({ params }: ReviewPageProps) {
     const searchParams = useSearchParams();
 
     const initializeStore = useProjectsStore(state => state.initializeStore);
-    const getProject = useProjectsStore(state => state.getProject);
+    // Subscribe to projects array for reactivity - changes to comments will trigger re-render
+    const projects = useProjectsStore(state => state.projects);
     const addComment = useProjectsStore(state => state.addComment);
     const updateComment = useProjectsStore(state => state.updateComment);
     const moveComment = useProjectsStore(state => state.moveComment);
     const toggleResolved = useProjectsStore(state => state.toggleResolved);
     const deleteComment = useProjectsStore(state => state.deleteComment);
+    const toggleResolvedViewer = useProjectsStore(state => state.toggleResolvedViewer);
+    const toggleResolvedCommenter = useProjectsStore(state => state.toggleResolvedCommenter);
     const initialized = useProjectsStore(state => state.initialized);
 
     const [deviceMode, setDeviceMode] = useState<DeviceMode>('desktop');
@@ -93,7 +98,16 @@ export default function ReviewPage({ params }: ReviewPageProps) {
         return null;
     }, [sharedData]);
 
-    const isSharedView = !!sharedProject;
+    // Role detection
+    const roleParam = searchParams.get('role');
+    const currentUserRole = roleParam === 'viewer' ? 'viewer' : 'commenter';
+
+    // Legacy shared data (base64 encoded in URL)
+    const hasLegacySharedData = !!sharedProject;
+
+    // isSharedView controls UI (hides Comment/Share for viewers)
+    const isSharedView = hasLegacySharedData || currentUserRole === 'viewer';
+
 
     // Initialize shared comments from decoded data
     useEffect(() => {
@@ -103,22 +117,25 @@ export default function ReviewPage({ params }: ReviewPageProps) {
     }, [sharedProject, sharedComments.length]);
 
     useEffect(() => {
-        if (!isSharedView) {
+        // Initialize store for non-legacy views (both commenter and viewer roles)
+        if (!hasLegacySharedData) {
             initializeStore();
         }
-    }, [initializeStore, isSharedView]);
+    }, [initializeStore, hasLegacySharedData]);
 
-    const project = isSharedView
+    // Project data: legacy shared data OR from store (using direct array access for reactivity)
+    const project = hasLegacySharedData
         ? { id: 'shared', url: sharedProject!.url, comments: sharedComments.length > 0 ? sharedComments : sharedProject!.comments, createdAt: '', updatedAt: '' }
-        : (initialized ? getProject(id) : null);
+        : (initialized ? projects.find(p => p.id === id) : null);
 
     useEffect(() => {
-        if (!isSharedView && initialized && !project) {
+        if (!hasLegacySharedData && initialized && !project) {
             router.push('/');
         }
-    }, [initialized, project, router, isSharedView]);
+    }, [initialized, project, router, hasLegacySharedData]);
 
-    if (!isSharedView && !initialized) {
+    // Show loading for non-legacy data while store initializes
+    if (!hasLegacySharedData && !initialized) {
         return (
             <div className="min-h-screen flex items-center justify-center">
                 <div className="flex items-center gap-2 text-muted-foreground">
@@ -133,9 +150,9 @@ export default function ReviewPage({ params }: ReviewPageProps) {
         return null;
     }
 
-    const handleAddPin = (xPct: number, yPct: number) => {
+    const handleAddPin = async (xPct: number, yPct: number) => {
         if (isSharedView) return;
-        const commentId = addComment(id, {
+        const commentId = await addComment(id, {
             type: 'pin',
             xPct,
             yPct,
@@ -145,9 +162,9 @@ export default function ReviewPage({ params }: ReviewPageProps) {
         setIsSidebarOpen(true);
     };
 
-    const handleAddArea = (xPct: number, yPct: number, widthPct: number, heightPct: number) => {
+    const handleAddArea = async (xPct: number, yPct: number, widthPct: number, heightPct: number) => {
         if (isSharedView) return;
-        const commentId = addComment(id, {
+        const commentId = await addComment(id, {
             type: 'area',
             xPct,
             yPct,
@@ -195,6 +212,30 @@ export default function ReviewPage({ params }: ReviewPageProps) {
         }
     };
 
+    const handleToggleResolvedViewer = (commentId: string) => {
+        if (hasLegacySharedData) {
+            setSharedComments(prev =>
+                prev.map(c =>
+                    c.id === commentId ? { ...c, resolvedByViewer: !c.resolvedByViewer } : c
+                )
+            );
+        } else {
+            toggleResolvedViewer(id, commentId);
+        }
+    }
+
+    const handleToggleResolvedCommenter = (commentId: string) => {
+        if (hasLegacySharedData) {
+            setSharedComments(prev =>
+                prev.map(c =>
+                    c.id === commentId ? { ...c, resolvedByCommenter: !c.resolvedByCommenter } : c
+                )
+            );
+        } else {
+            toggleResolvedCommenter(id, commentId);
+        }
+    }
+
     const handleShare = () => {
         setIsShareDialogOpen(true);
         setCopied(false);
@@ -202,8 +243,8 @@ export default function ReviewPage({ params }: ReviewPageProps) {
 
     const getShareUrl = () => {
         if (typeof window === 'undefined') return '';
-        const encoded = encodeProjectData(project as Project);
-        return `${window.location.origin}/review/shared?shared=${encoded}`;
+        // Share link always gives viewer access
+        return `${window.location.origin}/review/${id}?role=viewer`;
     };
 
     const handleCopyLink = async () => {
@@ -241,7 +282,7 @@ export default function ReviewPage({ params }: ReviewPageProps) {
                     onAddPin={handleAddPin}
                     onAddArea={handleAddArea}
                     onPinMove={handlePinMove}
-                    isReadOnly={isSharedView}
+                    isReadOnly={hasLegacySharedData}
                 />
 
                 {/* Sidebar Toggle Button */}
@@ -268,7 +309,10 @@ export default function ReviewPage({ params }: ReviewPageProps) {
                 onCommentUpdate={handleCommentUpdate}
                 onCommentDelete={handleCommentDelete}
                 onToggleResolved={handleToggleResolved}
-                isReadOnly={isSharedView}
+                onToggleResolvedViewer={handleToggleResolvedViewer}
+                onToggleResolvedCommenter={handleToggleResolvedCommenter}
+                currentUserRole={currentUserRole}
+                isReadOnly={hasLegacySharedData}
             />
 
             {/* Share Dialog */}
@@ -280,10 +324,11 @@ export default function ReviewPage({ params }: ReviewPageProps) {
                             Share Review
                         </DialogTitle>
                         <DialogDescription>
-                            Anyone with this link can view the webpage with your comments.
+                            Share this link with a developer. They can view comments and mark them as fixed.
                         </DialogDescription>
                     </DialogHeader>
-                    <div className="flex gap-2">
+
+                    <div className="flex gap-2 mt-4">
                         <Input
                             value={getShareUrl()}
                             readOnly

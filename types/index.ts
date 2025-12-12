@@ -13,7 +13,9 @@ export interface Comment {
     text: string;
     deviceMode: DeviceMode;
     createdAt: string;
-    isResolved?: boolean;
+    isResolved?: boolean; // Deprecated
+    resolvedByViewer?: boolean;
+    resolvedByCommenter?: boolean;
 }
 
 export interface Project {
